@@ -27,6 +27,14 @@ const asst = (stop, tokens) => ({
 });
 const usr = () => ({ type: 'user', timestamp: '2026-07-11T10:00:01.000Z', message: { role: 'user' } });
 const meta = (t) => ({ type: t });
+// An assistant record that also reports which bucket the cache write landed in.
+const asstCache = (stop, cacheCreation, tokens) => {
+  const r = asst(stop, tokens || 200000);
+  r.message.usage.cache_creation = cacheCreation;
+  return r;
+};
+const bucket5m = (n) => ({ ephemeral_5m_input_tokens: n, ephemeral_1h_input_tokens: 0 });
+const bucket1h = (n) => ({ ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: n });
 
 test('slug: each :, \\, / and . becomes its own dash', () => {
   assert.equal(slugCandidates('C:\\Users\\dev\\my-app')[0], 'C--Users-dev-my-app');
@@ -81,4 +89,55 @@ test('contextTokens = input + cache_read + cache_creation of the last assistant'
 test('readState returns null when there are no message records', () => {
   const f = tmpFile([meta('mode'), meta('permission-mode')]);
   assert.equal(readState(f), null);
+});
+
+test('observedTtlMs is 5m when the 5m cache bucket is the nonzero one', () => {
+  const f = tmpFile([asstCache('end_turn', bucket5m(18000))]);
+  assert.equal(readState(f).observedTtlMs, 300000);
+});
+
+test('observedTtlMs is 1h when the 1h cache bucket is the nonzero one', () => {
+  const f = tmpFile([asstCache('end_turn', bucket1h(18000))]);
+  assert.equal(readState(f).observedTtlMs, 3600000);
+});
+
+test('observedTtlMs is null when no assistant record reports a cache bucket', () => {
+  const f = tmpFile([asst('end_turn', 175000), usr(), asst('end_turn', 180000)]);
+  assert.equal(readState(f).observedTtlMs, null);
+});
+
+test('observedTtlMs is null when both buckets are zero', () => {
+  const f = tmpFile([asstCache('end_turn', { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 })]);
+  assert.equal(readState(f).observedTtlMs, null);
+});
+
+test('observedTtlMs follows a mid-session flip to the last bucket written', () => {
+  const f = tmpFile([asstCache('end_turn', bucket1h(9000)), usr(), asstCache('end_turn', bucket5m(9000))]);
+  assert.equal(readState(f).observedTtlMs, 300000);
+});
+
+test('an assistant turn that writes no cache leaves the last observed TTL standing', () => {
+  const f = tmpFile([asstCache('end_turn', bucket5m(9000)), usr(), asst('end_turn', 210000)]);
+  assert.equal(readState(f).observedTtlMs, 300000);
+});
+
+test('per-iteration usage copies are ignored so a bucket cannot be double-read', () => {
+  const r = asstCache('end_turn', bucket5m(9000));
+  r.message.usage.iterations = [{ cache_creation: bucket1h(9000) }];
+  assert.equal(readState(tmpFile([r])).observedTtlMs, 300000);
+});
+
+test('an ambiguous record with both buckets nonzero observes nothing', () => {
+  const f = tmpFile([asstCache('end_turn', { ephemeral_5m_input_tokens: 5, ephemeral_1h_input_tokens: 5 })]);
+  assert.equal(readState(f).observedTtlMs, null);
+});
+
+test('a malformed cache_creation does not throw and observes nothing', () => {
+  for (const bad of ['5m', 42, null, [], { ephemeral_5m_input_tokens: 'lots' }]) {
+    assert.equal(readState(tmpFile([asstCache('end_turn', bad)])).observedTtlMs, null);
+  }
+});
+
+test('a missing transcript file yields no state at all', () => {
+  assert.equal(readState(path.join(os.tmpdir(), 'cml-does-not-exist', 'session.jsonl')), null);
 });

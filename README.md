@@ -104,9 +104,11 @@ Tune `--size-gate` to the context size where a cold resume actually starts to hu
 
 ### Cache TTL
 
-The idle and grace windows are derived from the prompt-cache TTL so the tool fires while the cache is still warm (idle = 80% of the TTL, grace = 6x it). The TTL is resolved in this order: `--ttl` / `CML_TTL`, then `FORCE_PROMPT_CACHING_5M=1` (→ 5m), then `ENABLE_PROMPT_CACHING_1H=1` (→ 1h), then a detected API-key / Bedrock / Vertex / Foundry auth (→ 5m), else the **1-hour** default. Run with `--verbose` to see which one was chosen. Explicit `--idle` / `--grace` always win over the derived values.
+The idle and grace windows are derived from the prompt-cache TTL so the tool fires while the cache is still warm (idle = 80% of the TTL, grace = 6x it). The TTL is resolved in this order: `--ttl` / `CML_TTL`, then the TTL **observed in the transcript**, then `FORCE_PROMPT_CACHING_5M=1` (→ 5m), then `ENABLE_PROMPT_CACHING_1H=1` (→ 1h), then a detected API-key / Bedrock / Vertex / Foundry auth (→ 5m), else the **1-hour** default. Run with `--verbose` to see which one was chosen. Explicit `--idle` / `--grace` always win over the derived values.
 
-Detection is best-effort. If a subscription exceeds its plan limit mid-session, Claude Code silently drops the cache to 5 minutes and the tool cannot see it — pass `--ttl 5m` if you know your cache is short. If you also export `ANTHROPIC_API_KEY` while signed in on a subscription, the tool assumes 5 minutes and compacts earlier than necessary; pass `--ttl 1h` to override.
+In Claude mode the transcript reports which bucket each request's cache write actually landed in (`ephemeral_5m_input_tokens` vs `ephemeral_1h_input_tokens`), so the TTL is measured rather than guessed. That measurement outranks every environment signal below it, because those only say what Claude Code was *asked* to do. The transcript is re-read every sweep, so a mid-session flip — a subscription going over its plan limit and silently dropping from 1 hour to 5 minutes — re-tunes the idle and grace windows within a sweep of the next assistant turn.
+
+Without a transcript (`--no-transcript`, or before the session has written one) resolution falls back to the environment guess. If you export `ANTHROPIC_API_KEY` while signed in on a subscription, the tool assumes 5 minutes and compacts earlier than necessary; pass `--ttl 1h` to override.
 
 ## Limitations
 
@@ -115,6 +117,11 @@ Detection is best-effort. If a subscription exceeds its plan limit mid-session, 
 - **Deferral is conservative on purpose.** Anything the wrapper cannot prove about the composer (a paste, a history key, a possible voice transcript) parks the compaction until your next submit. A skipped compaction costs a little money; a wrong injection could submit garbage into your session. There is no safe way to blindly clear an agent CLI's composer from outside (in Claude Code, single Esc does not clear, and double-Esc on an empty composer opens the rewind picker), so the wrapper never tries.
 
 ## Changelog
+
+### Unreleased
+
+- **New: the cache TTL is read from the transcript instead of guessed.** Each assistant record reports whether its cache write went into the 5-minute or the 1-hour bucket, so in Claude mode the TTL is observed rather than inferred from environment variables. The observation ranks below `--ttl` / `CML_TTL` and above every env signal.
+- **Mid-session flips are now handled.** The transcript is re-read every sweep, so a subscription overage that drops the cache from 1 hour to 5 minutes re-derives the idle and grace windows instead of leaving the tool compacting 43 minutes after the cache went cold. Pinned `--idle` / `--grace` / `CML_IDLE_MS` / `CML_GRACE_MS` still win.
 
 ### 0.3.0
 
