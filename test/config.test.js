@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { buildConfig, applyObservedTtl, parseTtl } = require('../lib/config');
+const { buildConfig, applyObservedTtl, parseTtl, SAVE_PROMPT } = require('../lib/config');
 
 test('command after -- is separated from flags', () => {
   const { command } = buildConfig(['--verbose', '--', 'claude', '--foo'], {});
@@ -40,6 +40,17 @@ test('compact-cmd and save-prompt pass through verbatim', () => {
   const { config } = buildConfig(['--compact-cmd', '/squash', '--save-prompt', 'save now', '--', 'x'], {});
   assert.equal(config.compactCmd, '/squash');
   assert.equal(config.savePrompt, 'save now');
+});
+
+test('no save turn runs unless one is asked for', () => {
+  assert.equal(buildConfig(['--', 'claude'], {}).config.savePrompt, null);
+  assert.equal(buildConfig(['--save', '--', 'claude'], {}).config.savePrompt, SAVE_PROMPT);
+  assert.equal(buildConfig(['--', 'claude'], { CML_SAVE: '1' }).config.savePrompt, SAVE_PROMPT);
+});
+
+test('--no-save wins over an inherited CML_SAVE_PROMPT', () => {
+  const { config } = buildConfig(['--no-save', '--', 'claude'], { CML_SAVE_PROMPT: 'save now' });
+  assert.equal(config.savePrompt, null);
 });
 
 test('parseTtl understands 5m, 1h, and bare seconds', () => {

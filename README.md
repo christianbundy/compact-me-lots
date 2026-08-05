@@ -4,7 +4,7 @@ Keep an idle agent CLI cheap to resume.
 
 ![compact-me-lots banking a compaction on an idle Claude Code session](https://raw.githubusercontent.com/Yodaisgaming/Compact-me-lots/main/docs/demo.svg)
 
-`compact-me-lots` wraps a command like `claude` in a pseudo-terminal and watches it in the background. When the session goes idle while its prompt cache is still warm, it banks a cheap compaction for you: it asks the agent to save its state, waits for that turn to finish, then runs the compact command. When you come back, the cold re-entry pays input cost on a small summary instead of the entire conversation.
+`compact-me-lots` wraps a command like `claude` in a pseudo-terminal and watches it in the background. When the session goes idle while its prompt cache is still warm, it banks a cheap compaction for you by running the compact command. When you come back, the cold re-entry pays input cost on a small summary instead of the entire conversation.
 
 You use your terminal exactly as before. The wrapper is transparent.
 
@@ -64,9 +64,8 @@ you --type--> compact-me-lots (pty wrapper) --> claude
                      |         and (for Claude) real context size from the transcript
                      |
                      | when idle + cache about to lapse and the turn is complete:
-                     +--> inject a save-state prompt
-                          --> wait for that turn to finish
-                              --> inject the compact command
+                     +--> inject the compact command
+                          (with --save: a save-state turn runs first)
 ```
 
 Key behaviors:
@@ -78,10 +77,13 @@ Key behaviors:
 - **Small or abandoned sessions are left alone.** Below a size gate a cold return is already cheap, and a session idle for longer than the grace window is treated as abandoned.
 - **Fresh, unused sessions are never touched.** In Claude mode nothing fires until the session transcript exists with a known context size, and in generic mode nothing fires until you have submitted at least once. This keeps injections away from empty sessions and away from startup dialogs (folder trust, permission prompts) that an injected Enter would otherwise confirm.
 - **Batched keystrokes are handled.** Terminals and multiplexers (tmux, ssh, ConPTY) can deliver text and its Enter in one chunk, and pastes can end with a newline. Chunks are split on Enter boundaries, so a merged submit is recognized instead of being mistaken for an unsent draft.
+- **The save-state turn is opt-in.** Compaction is one injection by default. `--save` adds a turn that asks the agent to persist load-bearing state first, which costs a whole extra turn — on a 5-minute cache that turn can consume the warm window the compaction was meant to fit inside.
 
 ### Claude mode vs generic mode
 
 By default the wrapper reads Claude Code's session transcript (`~/.claude/projects/...`) to know the real context size and when a turn has truly completed. A candidate transcript is only accepted when its records name the wrapper's own working directory, so with several Claude sessions open the wrapper never latches onto a different session's transcript. Discovery re-runs continuously, which also follows Claude Code when it continues in a new session file after a compaction. Pass `--no-transcript` when wrapping a non-Claude CLI to fall back to terminal-quiet heuristics with a configurable compact command.
+
+**If the agent does not stay in the wrapper's working directory, that match fails and nothing ever compacts.** `claude --worktree` is the case that bites: it moves the session into a new worktree, so every transcript record names the worktree rather than the launch directory. Install the `SessionStart` hook in [`extras/handshake-hook/`](extras/handshake-hook/) and the session reports its transcript path directly, which is exact. See [`docs/handshake.md`](docs/handshake.md).
 
 ## Options
 
@@ -92,13 +94,15 @@ By default the wrapper reads Claude Code's session transcript (`~/.claude/projec
 | `--grace <seconds>` | `6x TTL` | Past this the session is treated as abandoned and left alone (1800 at 5m, 21600 at 1h) |
 | `--size-gate <tokens>` | `100000` | Minimum context size worth compacting (Claude transcript mode only) |
 | `--compact-cmd <text>` | `/compact` | Command injected to compact |
-| `--save-prompt <text>` | built-in | Prompt injected before compacting to persist state |
+| `--save` | off | Run a built-in save-state turn before compacting |
+| `--save-prompt <text>` | off | Same, with your own prompt |
+| `--no-save` | | No save turn, overriding `CML_SAVE` / `CML_SAVE_PROMPT` |
 | `--no-transcript` | off | Ignore the Claude transcript; use terminal quiet time only |
 | `--verbose`, `-v` | off | Log decisions to stderr |
 | `--version`, `-V` | | Print the version |
 | `--help`, `-h` | | Show help |
 
-Every option also has a `CML_*` environment variable (`CML_TTL`, `CML_IDLE_MS`, `CML_GRACE_MS`, `CML_SIZE_GATE`, `CML_COMPACT_CMD`, `CML_SAVE_PROMPT`, `CML_NO_TRANSCRIPT`, `CML_VERBOSE`).
+Every option also has a `CML_*` environment variable (`CML_TTL`, `CML_IDLE_MS`, `CML_GRACE_MS`, `CML_SIZE_GATE`, `CML_COMPACT_CMD`, `CML_SAVE`, `CML_SAVE_PROMPT`, `CML_NO_TRANSCRIPT`, `CML_VERBOSE`).
 
 Tune `--size-gate` to the context size where a cold resume actually starts to hurt for you. A good anchor is your own typical post-compact context: if a fresh session settles around, say, 180k tokens, set the gate near there so only sessions large enough to be worth it get banked. The `100000` default is a conservative floor.
 
@@ -115,11 +119,14 @@ Without a transcript (`--no-transcript`, or before the session has written one) 
 - **Generic mode is a heuristic.** Without the Claude transcript it decides "the turn is done" from a long idle plus terminal quiet. An agent that stalls silently mid-turn for the full idle window could in principle be interrupted. It also cannot tell a composer apart from a dialog, so a prompt that appears while you are away could receive the injected Enter. Claude mode has neither problem because it reads the real turn state and stays inert until a transcript exists. Use `--no-transcript` only for non-Claude CLIs, and prefer agents whose idle screens are genuinely quiet.
 - **Injection interleave.** If you start typing in the brief window (~200ms) after an injection begins, the tool cancels its own Enter, so nothing is submitted on your behalf. The already-written prompt text may momentarily interleave with your keystrokes in the composer. If you see that, clear the line and retype. Nothing is sent without a real, uninterrupted Enter.
 - **Deferral is conservative on purpose.** Anything the wrapper cannot prove about the composer (a paste, a history key, a possible voice transcript) parks the compaction until your next submit. A skipped compaction costs a little money; a wrong injection could submit garbage into your session. There is no safe way to blindly clear an agent CLI's composer from outside (in Claude Code, single Esc does not clear, and double-Esc on an empty composer opens the rewind picker), so the wrapper never tries.
+- **Transcript discovery is a guess unless you install the hook.** A session that moves out of the wrapper's working directory is never found, and an unfound session never compacts, with no error. Install [`extras/handshake-hook/`](extras/handshake-hook/) if you launch with `--worktree`, `--add-dir`, or a launcher that `cd`s elsewhere.
 
 ## Changelog
 
 ### Unreleased
 
+- **Behavior change: the save-state turn is now opt-in.** A compaction is one injection by default. The save turn costs a whole extra model turn, and on a 5-minute cache that turn can consume the warm window the compaction had to fit inside. Pass `--save` for the built-in prompt, `--save-prompt <text>` / `CML_SAVE_PROMPT` for your own, and `--no-save` to override either.
+- **New: the session can report its own transcript path.** The wrapper names a handshake file in `CML_HANDSHAKE`, and the `SessionStart` hook in [`extras/handshake-hook/`](extras/handshake-hook/) writes the real `transcript_path` there. Discovery from the working directory stays the fallback, but it misses outright under `claude --worktree`, so a session launched that way never compacted before. See [`docs/handshake.md`](docs/handshake.md).
 - **New: the cache TTL is read from the transcript instead of guessed.** Each assistant record reports whether its cache write went into the 5-minute or the 1-hour bucket, so in Claude mode the TTL is observed rather than inferred from environment variables. The observation ranks below `--ttl` / `CML_TTL` and above every env signal.
 - **Mid-session flips are now handled.** The transcript is re-read every sweep, so a subscription overage that drops the cache from 1 hour to 5 minutes re-derives the idle and grace windows instead of leaving the tool compacting 43 minutes after the cache went cold. Pinned `--idle` / `--grace` / `CML_IDLE_MS` / `CML_GRACE_MS` still win.
 

@@ -1,6 +1,6 @@
 # State-doc drift hook (Claude Code extra)
 
-A companion to `compact-me-lots` for Claude Code users. The wrapper's save prompt persists state *at* compaction time; this hook keeps your project's state docs fresh *between* compactions, so any compaction (yours, the wrapper's, or Claude Code's own auto-compact) loses less.
+A companion to `compact-me-lots` for Claude Code users. The wrapper's `--save` turn persists state *at* compaction time; this hook keeps your project's state docs fresh *between* compactions, so any compaction (yours, the wrapper's, or Claude Code's own auto-compact) loses less. It is the better half of the pair, because it costs no turn inside the warm cache window.
 
 It is a [Claude Code Stop hook](https://code.claude.com/docs/en/hooks): at the end of a turn it checks how much conversation has accumulated since your state docs were last touched, and when that drift is large it asks the agent once to bring the docs up to date before ending the turn.
 

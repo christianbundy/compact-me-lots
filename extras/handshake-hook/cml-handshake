@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Claude Code SessionStart hook. Reports this session's transcript path to the
+# compact-me-lots wrapper that launched it. See docs/handshake.md.
+#
+# Exits quietly when CML_HANDSHAKE is unset, so the same hook is harmless in a
+# session that no wrapper started.
+set -euo pipefail
+[ -n "${CML_HANDSHAKE:-}" ] || exit 0
+jq -c '{transcript_path, cwd}' >"$CML_HANDSHAKE"

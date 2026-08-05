@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { slugCandidates, cwdMarker, fileMatchesCwd, readState } = require('../lib/transcript');
+const { slugCandidates, cwdMarker, fileMatchesCwd, readHandshake, readState } = require('../lib/transcript');
 
 // Fixtures mirror Claude Code's real JSONL: assistant records carry
 // message.stop_reason + message.usage; user records carry tool results or user
@@ -57,6 +57,37 @@ test('cwd marker matching preserves JSON escaping', () => {
   const cwd = 'C:\\dev\\a"b';
   const f = tmpFile([{ type: 'user', cwd, message: { role: 'user' } }]);
   assert.equal(fileMatchesCwd(f, cwdMarker(cwd)), true);
+});
+
+function tmpHandshake(body) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cml-hs-'));
+  const f = path.join(dir, 'handshake.json');
+  fs.writeFileSync(f, typeof body === 'string' ? body : JSON.stringify(body));
+  return f;
+}
+
+test('the handshake resolves to the transcript path the agent reported', () => {
+  const t = tmpFile([asst('end_turn', 200000)]);
+  assert.equal(readHandshake(tmpHandshake({ transcript_path: t })), t);
+});
+
+test('a handshake that is missing, empty or malformed resolves to nothing', () => {
+  assert.equal(readHandshake(null), null);
+  assert.equal(readHandshake('/nonexistent/handshake.json'), null);
+  assert.equal(readHandshake(tmpHandshake('')), null);
+  assert.equal(readHandshake(tmpHandshake('not json')), null);
+  assert.equal(readHandshake(tmpHandshake({})), null);
+  assert.equal(readHandshake(tmpHandshake({ transcript_path: 42 })), null);
+});
+
+test('the handshake rejects a path that is not an existing .jsonl file', () => {
+  const t = tmpFile([asst('end_turn', 200000)]);
+  assert.equal(readHandshake(tmpHandshake({ transcript_path: t + '.bak' })), null);
+  const dir = path.join(path.dirname(t), 'directory.jsonl');
+  fs.mkdirSync(dir);
+  assert.equal(readHandshake(tmpHandshake({ transcript_path: dir })), null);
+  fs.unlinkSync(t);
+  assert.equal(readHandshake(tmpHandshake({ transcript_path: t })), null);
 });
 
 test('settled TRUE when the last message record is an assistant end_turn', () => {

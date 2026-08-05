@@ -12,9 +12,11 @@ const cfg = {
   minTurnMs: 10000,
   maxPhaseMs: 300000,
   useTranscript: true,
+  savePrompt: '<save state>',
 };
 
 const genericCfg = Object.assign({}, cfg, { useTranscript: false, sizeGate: 0 });
+const noSaveCfg = Object.assign({}, cfg, { savePrompt: null });
 
 function ctx(over) {
   return Object.assign({
@@ -35,6 +37,28 @@ test('fires save when idle, settled, big and quiet', () => {
   const m = createMachine();
   assert.equal(decide(m, ctx(), cfg), 'save');
   assert.equal(m.phase, 'saving');
+});
+
+test('with no save prompt the compaction fires straight from watch', () => {
+  const m = createMachine();
+  assert.equal(decide(m, ctx(), noSaveCfg), 'compact');
+  assert.equal(m.phase, 'compacting');
+});
+
+test('a save-less compaction still settles to done after the min-turn floor', () => {
+  const m = createMachine();
+  assert.equal(decide(m, ctx({ now: 1000000 }), noSaveCfg), 'compact');
+  assert.equal(decide(m, ctx({ now: 1005000 }), noSaveCfg), 'none');
+  assert.equal(decide(m, ctx({ now: 1011000 }), noSaveCfg), 'done');
+  assert.equal(m.phase, 'done');
+});
+
+test('a save-less cycle honors every watch gate', () => {
+  const m = createMachine();
+  assert.equal(decide(m, ctx({ settled: false }), noSaveCfg), 'none');
+  assert.equal(decide(m, ctx({ contextTokens: 50000 }), noSaveCfg), 'none');
+  assert.equal(decide(m, ctx({ realIdleMs: 100000 }), noSaveCfg), 'none');
+  assert.equal(m.phase, 'watch');
 });
 
 test('pending unsent input defers', () => {

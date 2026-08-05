@@ -6,9 +6,8 @@ const { buildConfig } = require('../lib/config');
 const HELP = `compact-me-lots - keep an idle agent CLI cheap to resume.
 
 Wraps a command in a pseudo-terminal and, when the session goes idle while its
-prompt cache is still warm, banks a cheap compaction: it saves state, waits for
-that turn to finish, then compacts. When you come back the cold re-entry pays
-input cost on a small summary instead of the whole conversation.
+prompt cache is still warm, banks a cheap compaction. When you come back the cold
+re-entry pays input cost on a small summary instead of the whole conversation.
 
 Usage:
   compact-me-lots [options] -- <command> [args...]
@@ -32,7 +31,11 @@ Options:
   --size-gate <tokens>   Minimum context size worth compacting; only applies in
                          Claude transcript mode (default 100000)
   --compact-cmd <text>   Command injected to compact (default "/compact")
-  --save-prompt <text>   Prompt injected before compacting to persist state
+  --save                 Run a built-in save-state turn before compacting. Off by
+                         default: it is a whole extra turn, and on a 5m cache it
+                         can burn the window the compaction had to fit inside.
+  --save-prompt <text>   Same, with your own prompt
+  --no-save              No save turn, overriding CML_SAVE / CML_SAVE_PROMPT
   --no-transcript        Do not read the Claude transcript; rely on terminal
                          quiet time only (use for non-Claude CLIs)
   --verbose, -v          Log decisions to stderr
@@ -40,8 +43,12 @@ Options:
   --help, -h             Show this help
 
 All options can also be set via CML_* environment variables (CML_TTL, CML_IDLE_MS,
-CML_GRACE_MS, CML_SIZE_GATE, CML_COMPACT_CMD, CML_SAVE_PROMPT, CML_NO_TRANSCRIPT,
-CML_VERBOSE).
+CML_GRACE_MS, CML_SIZE_GATE, CML_COMPACT_CMD, CML_SAVE, CML_SAVE_PROMPT,
+CML_NO_TRANSCRIPT, CML_VERBOSE).
+
+In Claude mode the transcript is located from the working directory. If the agent
+moves elsewhere (claude --worktree), install the SessionStart hook in
+extras/handshake-hook/ so the session reports its transcript instead.
 `;
 
 function main() {
